@@ -1,10 +1,18 @@
 import express from 'express';
 import { ProfileController } from '../controllers/profileController';
+import { MatchController } from '../controllers/matchController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { validateProfileUpdate, validateUidParam, validatePagination } from '../middleware/validation';
-import { profileRateLimit } from '../middleware/ratelimitter';
+import { profileRateLimit, matchRateLimit } from '../middleware/ratelimitter';
 
 const router = express.Router();
+
+router.use((req, res, next) => {
+  console.log(`${req.method} ${req.path} - ${req.originalUrl}`);
+  next();
+});
+
+// SPECIFIC ROUTES FIRST (before any wildcard routes)
 
 /**
  * @route   GET /api/profile/me
@@ -17,20 +25,50 @@ router.get('/me',
 );
 
 /**
- * @route   GET /api/profile/:uid
- * @desc    Get public profile of another user
- * @access  Public
+ * @route   GET /api/profile/admin/stats
+ * @desc    Get user statistics (admin only)
+ * @access  Private (Admin)
  */
-router.get('/:uid',
-  validateUidParam,
-  ProfileController.getUserProfile
+router.get('/admin/stats',
+  authenticateToken,
+  requireRole(['admin']),
+  ProfileController.getStats
+);
+
+/**
+ * @route   POST /api/profile/calendar/connect
+ * @desc    Store Google Calendar access token
+ * @access  Private
+ */
+router.post('/calendar/connect',
+  authenticateToken,
+  ProfileController.storeCalendarToken
+);
+
+/**
+ * @route   POST /api/profile/calendar/sync
+ * @desc    Sync Google Calendar availability
+ * @access  Private
+ */
+router.post('/calendar/sync',
+  authenticateToken,
+  ProfileController.syncCalendarAvailability
+);
+
+/**
+ * @route   POST /api/profile/session/book-two-way
+ * @desc    Book a session for both users and create calendar events
+ * @access  Private
+ */
+router.post('/session/book-two-way',
+  authenticateToken,
+  ProfileController.bookTwoWaySession
 );
 
 /**
  * @route   POST /api/profile/update
  * @desc    Update current user's profile
  * @access  Private
- * @body    { name?, avatar_url?, skills_offered?, skills_wanted?, availability? }
  */
 router.post('/update',
   authenticateToken,
@@ -43,7 +81,6 @@ router.post('/update',
  * @route   POST /api/profile/badges
  * @desc    Update user's badge count (for achievements)
  * @access  Private
- * @body    { increment }
  */
 router.post('/badges',
   authenticateToken,
@@ -51,24 +88,35 @@ router.post('/badges',
 );
 
 /**
- * @route   DELETE /api/profile/:uid?
+ * @route   POST /api/profile/rate-session
+ * @desc    Rate a completed session and update mentor's badge score
+ * @access  Private
+ */
+router.post('/rate-session',
+  authenticateToken,
+  ProfileController.rateSession
+);
+
+// WILDCARD ROUTES LAST (after all specific routes)
+
+/**
+ * @route   GET /api/profile/:uid
+ * @desc    Get public profile of another user
+ * @access  Public
+ */
+router.get('/:uid',
+  validateUidParam,
+  ProfileController.getUserProfile
+);
+
+/**
+ * @route   DELETE /api/profile/:uid
  * @desc    Delete user profile (own profile or admin)
  * @access  Private
  */
 router.delete('/:uid',
   authenticateToken,
   ProfileController.deleteProfile
-);
-
-/**
- * @route   GET /api/profile/admin/stats
- * @desc    Get user statistics (admin only)
- * @access  Private (Admin)
- */
-router.get('/admin/stats',
-  authenticateToken,
-  requireRole(['admin']),
-  ProfileController.getStats
 );
 
 export default router;

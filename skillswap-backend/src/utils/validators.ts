@@ -1,5 +1,21 @@
 import { z } from 'zod';
 
+// Time range validation regex
+const timeRangeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]-([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+
+// Custom time range validator
+const timeRangeValidator = (timeRange: string): boolean => {
+  if (!timeRangeRegex.test(timeRange)) return false;
+  
+  const [start, end] = timeRange.split('-');
+  const [startHour, startMin] = start.split(':').map(Number);
+  const [endHour, endMin] = end.split(':').map(Number);
+  const startMinutes = startHour * 60 + startMin;
+  const endMinutes = endHour * 60 + endMin;
+  
+  return startMinutes < endMinutes;
+};
+
 // User registration schema
 export const registerSchema = z.object({
   idToken: z.string().min(1, 'Firebase ID token is required'),
@@ -22,7 +38,11 @@ export const registerSchema = z.object({
     days: z.array(z.enum(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']))
       .optional()
       .default([]),
-    times: z.array(z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Invalid time format'))
+    times: z.array(
+      z.string().refine(timeRangeValidator, {
+        message: 'Invalid time range format. Use "HH:MM-HH:MM" where start time is before end time'
+      })
+    )
       .optional()
       .default([])
   }).optional().default({ days: [], times: [] })
@@ -45,7 +65,11 @@ export const updateProfileSchema = z.object({
   availability: z.object({
     days: z.array(z.enum(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']))
       .optional(),
-    times: z.array(z.string().regex(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/, 'Invalid time format'))
+    times: z.array(
+      z.string().refine(timeRangeValidator, {
+        message: 'Invalid time range format. Use "HH:MM-HH:MM" where start time is before end time'
+      })
+    )
       .optional()
   }).optional()
 }).refine(data => Object.keys(data).length > 0, {
@@ -104,12 +128,12 @@ export const isValidUrl = (url: string): boolean => {
   }
 };
 
-// Time format validator (HH:MM)
-export const isValidTimeFormat = (time: string): boolean => {
-  return /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time);
+// Time range format validator (HH:MM-HH:MM) - UPDATED
+export const isValidTimeFormat = (timeRange: string): boolean => {
+  return timeRangeValidator(timeRange);
 };
 
-// Day validator
+// Day validator - KEPT ORIGINAL FORMAT
 export const isValidDay = (day: string): boolean => {
   return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].includes(day);
 };
@@ -121,6 +145,27 @@ export const cleanSkillsArray = (skills: string[]): string[] => {
     .filter(skill => skill.length > 0 && isValidSkillName(skill))
     .slice(0, 10); // Limit to 10 skills
 };
+
+export const timeRangesOverlap = (range1: string, range2: string): boolean => {
+  const parsed1 = parseTimeRange(range1);
+  const parsed2 = parseTimeRange(range2);
+  
+  if (!parsed1 || !parsed2) return false;
+  
+  const [start1Hour, start1Min] = parsed1.start.split(':').map(Number);
+  const [end1Hour, end1Min] = parsed1.end.split(':').map(Number);
+  const [start2Hour, start2Min] = parsed2.start.split(':').map(Number);
+  const [end2Hour, end2Min] = parsed2.end.split(':').map(Number);
+  
+  const start1Minutes = start1Hour * 60 + start1Min;
+  const end1Minutes = end1Hour * 60 + end1Min;
+  const start2Minutes = start2Hour * 60 + start2Min;
+  const end2Minutes = end2Hour * 60 + end2Min;
+  
+  // Two ranges overlap if: start1 < end2 AND start2 < end1
+  return start1Minutes < end2Minutes && start2Minutes < end1Minutes;
+};
+
 
 // Clean and validate availability
 export const cleanAvailability = (availability: any): { days: string[], times: string[] } => {
@@ -139,3 +184,13 @@ export const cleanAvailability = (availability: any): { days: string[], times: s
 
   return cleaned;
 };
+
+// Helper function to parse time range
+export const parseTimeRange = (timeRange: string): { start: string, end: string } | null => {
+  if (!isValidTimeFormat(timeRange)) return null;
+  
+  const [start, end] = timeRange.split('-');
+  return { start, end };
+};
+
+

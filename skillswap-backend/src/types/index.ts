@@ -10,9 +10,17 @@ export interface User {
     days: string[];
     times: string[];
   };
-  badge_count: number;
   created_at: Date;
   updated_at: Date;
+  badge_score: number;           // Average rating (0-5.0)
+  badge_count: number;          // Total number of ratings received
+  total_badge_points: number;   // Sum of all ratings
+  calendar_connected?: boolean;
+  calendar_synced?: boolean;
+  calendar_access_token?: string;
+  calendar_busy_times?: any[];
+  available_slots?: string[];
+  calendar_last_sync?: Date;
 }
 
 export interface CreateUserRequest {

@@ -1,8 +1,13 @@
+// routes/auth.ts - FIXED VERSION
 import express from 'express';
 import { AuthController } from '../controllers/authController';
 import { validateRegistration } from '../middleware/validation';
 import { authRateLimit } from '../middleware/ratelimitter';
-import { authenticateToken } from '../middleware/auth';
+import { 
+  authenticateToken, 
+  authenticateTokenForRegistration, 
+  authenticateTokenForLogin 
+} from '../middleware/auth';
 
 const router = express.Router();
 
@@ -10,10 +15,12 @@ const router = express.Router();
  * @route   POST /api/auth/register
  * @desc    Register a new user with Firebase
  * @access  Public
- * @body    { idToken, name, role?, avatar_url?, skills_offered?, skills_wanted?, availability? }
+ * @headers Authorization: Bearer <idToken>
+ * @body    { name, role?, avatar_url?, skills_offered?, skills_wanted?, availability? }
  */
 router.post('/register', 
   authRateLimit,
+  authenticateTokenForRegistration, // 🔥 Use registration-specific middleware
   validateRegistration,
   AuthController.register
 );
@@ -22,22 +29,23 @@ router.post('/register',
  * @route   POST /api/auth/login
  * @desc    Login user with Firebase ID token
  * @access  Public
- * @body    { idToken }
+ * @headers Authorization: Bearer <idToken>
  */
 router.post('/login',
   authRateLimit,
-  (req, res, next) => {
-    AuthController.login(req, res, next).catch(next);
-  }
+  authenticateTokenForLogin, // 🔥 Use login-specific middleware
+  AuthController.login
 );
 
 /**
  * @route   POST /api/auth/verify
  * @desc    Verify Firebase ID token
- * @access  Public
- * @body    { idToken }
+ * @access  Private
+ * @headers Authorization: Bearer <idToken>
  */
 router.post('/verify',
+  authRateLimit,
+  authenticateToken, // 🔥 Use regular middleware (requires user in DB)
   AuthController.verifyToken
 );
 
@@ -47,7 +55,7 @@ router.post('/verify',
  * @access  Private
  */
 router.post('/logout',
-  authenticateToken,
+  authenticateToken, // 🔥 Use regular middleware
   AuthController.logout
 );
 

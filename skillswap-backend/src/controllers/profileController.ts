@@ -4,6 +4,9 @@ import { logger } from '../utils/logger';
 import { AppError } from '../utils/errors';
 import { UpdateProfileRequest } from '../types';
 import { FieldValue } from 'firebase-admin/firestore';
+import { CalendarService } from '../services/calendarService';
+import { SessionRatingService } from '../services/sessionRatingService';
+import { SessionBookingService } from '../services/sessionBookingService';
 
 export class ProfileController {
   // Get current user's profile
@@ -315,4 +318,309 @@ export class ProfileController {
       next(error);
     }
   }
+
+ static async storeCalendarToken(req: Request, res: Response, next: NextFunction) {
+  try {
+    const uid = req.user!.uid;
+    const { accessToken } = req.body;
+
+    if (!accessToken) {
+      throw new AppError('Access token is required', 400);
+    }
+
+    await firestore.collection('users').doc(uid).update({
+      calendar_access_token: accessToken,
+      calendar_connected: true,
+      updated_at: FieldValue.serverTimestamp()
+    });
+
+    logger.info(`✅ Calendar token stored for user: ${uid}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Calendar connected successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// 🔥 UPDATED: Calendar sync method
+static async syncCalendarAvailability(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { uid } = req.user!;
+    const { accessToken } = req.body;
+
+    if (!accessToken) {
+      throw new AppError('Google Calendar access token is required', 400);
+    }
+
+    // Get user's current availability preferences
+    const userDoc = await firestore.collection('users').doc(uid).get();
+    if (!userDoc.exists) {
+      throw new AppError('User not found', 404);
+    }
+
+    const userData = userDoc.data()!;
+    
+    // 🔥 UPDATED: Handle new availability format
+    let userAvailability = userData.availability;
+    
+    if (!userAvailability || typeof userAvailability !== 'object') {
+      userAvailability = { days: [], times: [] };
+      console.log(`⚠️ User ${uid} has no manual availability set, using defaults`);
+    } else {
+      // Ensure days and times arrays exist
+      if (!userAvailability.days || !Array.isArray(userAvailability.days)) {
+        userAvailability.days = [];
+      }
+      if (!userAvailability.times || !Array.isArray(userAvailability.times)) {
+        userAvailability.times = [];
+      }
+    }
+
+    // Validate day format (should be 3-letter abbreviations)
+    const validDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    userAvailability.days = userAvailability.days.filter((day: string) => validDays.includes(day));
+
+    // Validate time format (should be ranges like "09:00-12:00")
+    const timeRangeRegex = /^\d{2}:\d{2}-\d{2}:\d{2}$/;
+    userAvailability.times = userAvailability.times.filter((time: string) => timeRangeRegex.test(time));
+
+    console.log(`📋 User ${uid} validated availability:`, userAvailability);
+
+    const busyTimes = await CalendarService.getUserAvailability(accessToken);
+    const availableSlots = await CalendarService.generateAvailableSlots(busyTimes, userAvailability, uid);
+    
+    await firestore.collection('users').doc(uid).update({
+      calendar_synced: true,
+      calendar_busy_times: busyTimes,
+      available_slots: availableSlots,
+      calendar_last_sync: FieldValue.serverTimestamp(),
+      updated_at: FieldValue.serverTimestamp()
+    });
+
+    logger.info(`✅ Calendar synced for user: ${uid}, generated ${availableSlots.length} available slots`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Calendar availability synced successfully',
+      data: {
+        available_slots: availableSlots,
+        busy_times_count: busyTimes.length,
+        user_availability: userAvailability,
+        slots_generated: availableSlots.length
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// 🔥 UPDATED: 2-way session booking
+static async bookTwoWaySession(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { uid: organizerUid } = req.user!;
+    const { 
+      organizerAccessToken, 
+      participantAccessToken,
+      participantUid,
+      summary, 
+      startTime, 
+      endTime, 
+      skillTopic, 
+      sessionType, 
+      description 
+    } = req.body;
+
+    // Validation
+    if (!organizerAccessToken || !participantAccessToken || !participantUid || !summary || !startTime || !endTime || !skillTopic) {
+      throw new AppError('Missing required fields: organizerAccessToken, participantAccessToken, participantUid, summary, startTime, endTime, skillTopic', 400);
+    }
+
+    // Validate time format
+    const startDateTime = new Date(startTime);
+    const endDateTime = new Date(endTime);
+    
+    if (isNaN(startDateTime.getTime()) || isNaN(endDateTime.getTime())) {
+      throw new AppError('Invalid date format. Use ISO format like: 2025-06-12T10:00:00+05:30', 400);
+    }
+
+    if (startDateTime >= endDateTime) {
+      throw new AppError('Start time must be before end time', 400);
+    }
+
+    // Get both users' emails
+    const [organizerDoc, participantDoc] = await Promise.all([
+      firestore.collection('users').doc(organizerUid).get(),
+      firestore.collection('users').doc(participantUid).get()
+    ]);
+
+    if (!organizerDoc.exists || !participantDoc.exists) {
+      throw new AppError('One or both users not found', 404);
+    }
+
+    const organizerEmail = organizerDoc.data()!.email;
+    const participantEmail = participantDoc.data()!.email;
+
+    // Create calendar events for both users
+    const { organizerEvent, participantEvent } = await CalendarService.createTwoWaySessionEvent(
+      organizerAccessToken,
+      participantAccessToken,
+      {
+        summary,
+        startTime,
+        endTime,
+        organizerEmail,
+        participantEmail,
+        description: description || `SkillSwap Session: ${skillTopic}`
+      }
+    );
+
+    // Book session in database
+    const sessionId = await SessionBookingService.bookTwoWaySession({
+      organizerUid,
+      participantUid,
+      startTime,
+      endTime,
+      skillTopic,
+      sessionType: sessionType || 'learning',
+      organizerEventId: organizerEvent.id,
+      participantEventId: participantEvent.id
+    });
+
+    logger.info(`✅ 2-way session booked for users ${organizerUid} & ${participantUid}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Session booked for both users and added to calendars',
+      data: {
+        sessionId,
+        organizer: {
+          eventId: organizerEvent.id,
+          eventLink: organizerEvent.htmlLink,
+          hangoutLink: organizerEvent.hangoutLink
+        },
+        participant: {
+          eventId: participantEvent.id,
+          eventLink: participantEvent.htmlLink,
+          hangoutLink: participantEvent.hangoutLink
+        },
+        summary,
+        startTime,
+        endTime,
+        skillTopic
+      }
+    });
+  } catch (error) {
+    logger.error('❌ Failed to book 2-way session:', error);
+    next(error);
+  }
+}
+
+
+
+
+static async rateSession(req: Request, res: Response, next: NextFunction) {
+  try {
+    const raterUid = req.user!.uid;
+    const { sessionId, mentorUid, rating } = req.body;
+
+    if (!sessionId || !mentorUid || !rating) {
+      throw new AppError('Session ID, mentor UID, and rating are required', 400);
+    }
+
+    if (rating < 1 || rating > 5) {
+      throw new AppError('Rating must be between 1 and 5', 400);
+    }
+
+    await SessionRatingService.rateSession(sessionId, raterUid, mentorUid, rating);
+
+    const mentorDoc = await firestore.collection('users').doc(mentorUid).get();
+    const mentorData = mentorDoc.data()!;
+
+    logger.info(`✅ Session rated by ${raterUid}: ${rating}/5 for mentor ${mentorUid}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Session rated successfully',
+      data: {
+        mentor_new_badge_score: mentorData.badge_score,
+        mentor_total_ratings: mentorData.badge_count
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// static async bookSession(req: Request, res: Response, next: NextFunction) {
+//   try {
+//     const uid = req.user!.uid;
+//     const { accessToken, summary, startTime, endTime, attendeeEmail, description } = req.body;
+
+//     // Validation
+//     if (!accessToken || !summary || !startTime || !endTime || !attendeeEmail) {
+//       throw new AppError('Missing required fields: accessToken, summary, startTime, endTime, attendeeEmail', 400);
+//     }
+
+//     // Validate time format
+//     const startDateTime = new Date(startTime);
+//     const endDateTime = new Date(endTime);
+    
+//     if (isNaN(startDateTime.getTime()) || isNaN(endDateTime.getTime())) {
+//       throw new AppError('Invalid date format. Use ISO format like: 2025-06-12T10:00:00+05:30', 400);
+//     }
+
+//     if (startDateTime >= endDateTime) {
+//       throw new AppError('Start time must be before end time', 400);
+//     }
+
+//     // Create calendar event
+//     const event = await CalendarService.createSessionEvent(accessToken, {
+//       summary,
+//       startTime,
+//       endTime,
+//       attendeeEmail,
+//       description: description || 'SkillSwap Learning Session'
+//     });
+
+//     // Store session record in Firestore
+//     const sessionRef = firestore.collection('sessions').doc();
+//     await sessionRef.set({
+//       id: sessionRef.id,
+//       organizer_uid: uid,
+//       attendee_email: attendeeEmail,
+//       summary,
+//       start_time: startDateTime,
+//       end_time: endDateTime,
+//       google_event_id: event.id,
+//       google_event_link: event.htmlLink,
+//       hangout_link: event.hangoutLink || null,
+//       status: 'scheduled',
+//       created_at: FieldValue.serverTimestamp()
+//     });
+
+//     logger.info(`✅ Session booked for user ${uid} with event ID: ${event.id}`);
+
+//     res.status(200).json({
+//       success: true,
+//       message: 'Session booked and added to calendar',
+//       data: {
+//         sessionId: sessionRef.id,
+//         eventId: event.id,
+//         eventLink: event.htmlLink,
+//         hangoutLink: event.hangoutLink || null,
+//         summary: event.summary,
+//         startTime: event.start?.dateTime,
+//         endTime: event.end?.dateTime,
+//         attendeeEmail: attendeeEmail
+//       }
+//     });
+//   } catch (error) {
+//     logger.error(`❌ Failed to book session for user:`, error);
+//     next(error);
+//   }
+// }
+
 }

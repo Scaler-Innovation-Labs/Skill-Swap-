@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { body, validationResult, param, query } from 'express-validator';
 import { AppError } from '../utils/errors';
+// Import the overlap function
+import { timeRangesOverlap } from '../utils/validators';
 
 // Validation error handler
 export const handleValidationErrors = (req: Request, res: Response, next: NextFunction): void => {
@@ -23,23 +25,17 @@ export const handleValidationErrors = (req: Request, res: Response, next: NextFu
   next();
 };
 
-// User registration validation
-// User registration validation
+// User registration validation - FIXED
 export const validateRegistration = [
-  body('idToken')
-    .notEmpty()
-    .withMessage('Firebase ID token is required'),
+  // ❌ REMOVED - Token is handled by middleware now
+  // body('idToken')
+  //   .notEmpty()
+  //   .withMessage('Firebase ID token is required'),
     
   body('name')
     .isLength({ min: 2, max: 100 })
     .withMessage('Name must be between 2 and 100 characters')
     .trim(),
-  
-  // ❌ REMOVE THIS - Email comes from Firebase token
-  // body('email')
-  //   .isEmail()
-  //   .withMessage('Valid email is required')
-  //   .normalizeEmail(),
   
   body('role')
     .optional()
@@ -60,10 +56,34 @@ export const validateRegistration = [
     .optional()
     .isArray()
     .withMessage('Skills wanted must be an array'),
+
+  // Keep original days format (Mon, Tue, etc.)
+  body('availability.days')
+    .optional()
+    .isArray()
+    .withMessage('Availability days must be an array'),
+  
+  body('availability.days.*')
+    .optional()
+    .isIn(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
+    .withMessage('Invalid day format'),
+  
+ // Updated times format for ranges
+body('availability.times')
+  .optional()
+  .isArray()
+  .withMessage('Availability times must be an array')
+  .custom((times) => {
+    const timeRangePattern = /^([01]?[0-9]|2[0-3]):[0-5][0-9]-([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    if (times && !times.every((time: string) => timeRangePattern.test(time))) {
+      //                      ^^^^^^^^^^^^^ Add explicit string type here
+      throw new Error('Times must be in format "HH:MM-HH:MM" (e.g., "09:00-12:00")');
+    }
+    return true;
+  }),
   
   handleValidationErrors
 ];
-
 
 // Profile update validation
 export const validateProfileUpdate = [
@@ -98,6 +118,7 @@ export const validateProfileUpdate = [
     .isLength({ min: 1, max: 50 })
     .withMessage('Each skill must be between 1 and 50 characters'),
   
+  // Keep original days format (Mon, Tue, etc.)
   body('availability.days')
     .optional()
     .isArray()
@@ -108,10 +129,44 @@ export const validateProfileUpdate = [
     .isIn(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
     .withMessage('Invalid day format'),
   
+  // Updated times format for ranges
   body('availability.times')
     .optional()
     .isArray()
-    .withMessage('Availability times must be an array'),
+    .withMessage('Availability times must be an array')
+   .custom((times) => {
+    const timeRangePattern = /^([01]?[0-9]|2[0-3]):[0-5][0-9]-([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    if (times && !times.every((time: string) => timeRangePattern.test(time))) {
+      //                      ^^^^^^^^^^^^^ Explicitly typed as string
+      throw new Error('Times must be in format "HH:MM-HH:MM" (e.g., "09:00-12:00")');
+    }
+      // Additional validation: start time should be before end time
+      if (times) {
+        for (const timeRange of times) {
+          const [start, end] = timeRange.split('-');
+          const [startHour, startMin] = start.split(':').map(Number);
+          const [endHour, endMin] = end.split(':').map(Number);
+          const startMinutes = startHour * 60 + startMin;
+          const endMinutes = endHour * 60 + endMin;
+          
+          if (startMinutes >= endMinutes) {
+            throw new Error(`Invalid time range "${timeRange}": start time must be before end time`);
+          }
+
+             // Check for overlaps - STRICT REJECTION
+          if (times && times.length > 1) {
+            for (let i = 0; i < times.length; i++) {
+              for (let j = i + 1; j < times.length; j++) {
+                if (timeRangesOverlap(times[i], times[j])) {
+                  throw new Error(`Time ranges "${times[i]}" and "${times[j]}" overlap. Please use non-overlapping time slots.`);
+                }
+              }
+            }
+          }
+        }
+      }
+      return true;
+    }),
   
   handleValidationErrors
 ];

@@ -3,6 +3,7 @@ import { firestore } from '../config/firebase';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/errors';
 import { FieldValue } from 'firebase-admin/firestore';
+import { RedesignedMatchingService } from '../services/redesignedMatchingService';
 
 export class MatchController {
   // Get matched users for current user
@@ -272,4 +273,123 @@ export class MatchController {
       next(error);
     }
   }
+
+  // Add these new methods to your existing MatchController class
+
+static async getRedesignedMatches(req: Request, res: Response, next: NextFunction) {
+  try {
+    const uid = req.user!.uid;
+    const limit = parseInt(req.query.limit as string) || 10;
+
+    const deniedMentors = await RedesignedMatchingService.getDeniedMentors(uid);
+    const matches = await RedesignedMatchingService.findMatches(uid, deniedMentors, limit);
+
+    logger.info(`✅ Retrieved ${matches.length} redesigned matches for user: ${uid}`);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        matches,
+        algorithm_version: 'redesigned_v1',
+        excluded_mentors: deniedMentors.length
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+static async retryMatching(req: Request, res: Response, next: NextFunction) {
+  try {
+    const uid = req.user!.uid;
+    const { excludeUids = [], retry = true } = req.body;
+
+    if (!retry) {
+      throw new AppError('Retry flag must be true', 400);
+    }
+
+    const deniedMentors = await RedesignedMatchingService.getDeniedMentors(uid);
+    const allExcluded = [...new Set([...deniedMentors, ...excludeUids])];
+    const matches = await RedesignedMatchingService.findMatches(uid, allExcluded, 10);
+
+    logger.info(`🔄 Retry matching for user ${uid}, excluded ${allExcluded.length} mentors`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Retry matching completed',
+      data: {
+        matches,
+        excluded_count: allExcluded.length,
+        retry: true
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+static async manualMatch(req: Request, res: Response, next: NextFunction) {
+  try {
+    const uid = req.user!.uid;
+    const { preferredUid } = req.body;
+
+    if (!preferredUid) {
+      throw new AppError('Preferred mentor UID is required', 400);
+    }
+
+    const mentorProfile = await RedesignedMatchingService.getMentorProfile(preferredUid);
+
+    const currentUserDoc = await firestore.collection('users').doc(uid).get();
+    const currentUser = currentUserDoc.data()!;
+    const skillsWanted = currentUser.skills_wanted || [];
+    const skillsOffered = mentorProfile.skillsOffered || [];
+
+    const matchingSkills = skillsWanted.filter((skill: string) =>
+      skillsOffered.some((offered: string) =>
+        offered.toLowerCase() === skill.toLowerCase()
+      )
+    );
+
+    const isCompatible = matchingSkills.length > 0;
+
+    logger.info(`👤 Manual match request: ${uid} → ${preferredUid}`);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        mentor: mentorProfile,
+        skill_compatibility: isCompatible,
+        matching_skills: matchingSkills,
+        manual_selection: true
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+static async denyMentor(req: Request, res: Response, next: NextFunction) {
+  try {
+    const uid = req.user!.uid;
+    const { mentorUid } = req.body;
+
+    if (!mentorUid) {
+      throw new AppError('Mentor UID is required', 400);
+    }
+
+    await RedesignedMatchingService.storeDenial(uid, mentorUid);
+
+    logger.info(`❌ User ${uid} denied mentor ${mentorUid}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Mentor denied successfully',
+      data: {
+        denied_mentor: mentorUid
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
 }

@@ -19,7 +19,55 @@ declare global {
   }
 }
 
-// Middleware to authenticate Firebase JWT tokens
+// Middleware specifically for registration - only verifies Firebase token
+export const authenticateTokenForRegistration = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader) {
+      throw new AppError('Authorization header is required', 401);
+    }
+
+    const token = authHeader.split(' ')[1]; // Bearer TOKEN
+    
+    if (!token) {
+      throw new AppError('Token is required', 401);
+    }
+
+    // Verify Firebase ID token
+    const decodedToken = await verifyFirebaseToken(token);
+    
+    // For registration, we only need the Firebase token info
+    // Don't check if user exists in database - they're registering!
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email || '',
+      role: '', // Will be set during registration
+      name: '' // Will be set during registration
+    };
+
+    logger.info(`🔐 Firebase token verified for registration: ${decodedToken.uid}`);
+    next();
+  } catch (error) {
+    logger.error('❌ Authentication failed:', error);
+    
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        success: false,
+        error: error.message
+      });
+      return;
+    }
+
+    res.status(401).json({
+      success: false,
+      error: 'Authentication failed'
+    });
+    return;
+  }
+};
+
+// Original middleware for authenticated routes (checks database)
 export const authenticateToken = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const authHeader = req.headers.authorization;
@@ -60,6 +108,54 @@ export const authenticateToken = async (req: Request, res: Response, next: NextF
     };
 
     logger.info(`🔐 User authenticated: ${user.uid}`);
+    next();
+  } catch (error) {
+    logger.error('❌ Authentication failed:', error);
+    
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        success: false,
+        error: error.message
+      });
+      return;
+    }
+
+    res.status(401).json({
+      success: false,
+      error: 'Authentication failed'
+    });
+    return;
+  }
+};
+
+// Modified login middleware - checks if user exists, handles both cases
+export const authenticateTokenForLogin = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader) {
+      throw new AppError('Authorization header is required', 401);
+    }
+
+    const token = authHeader.split(' ')[1]; // Bearer TOKEN
+    
+    if (!token) {
+      throw new AppError('Token is required', 401);
+    }
+
+    // Verify Firebase ID token
+    const decodedToken = await verifyFirebaseToken(token);
+    
+    // For login, we verify token but don't require user to exist in our DB
+    // The controller will handle the "needs registration" case
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email || '',
+      role: '', // Will be populated if user exists
+      name: '' // Will be populated if user exists
+    };
+
+    logger.info(`🔐 Firebase token verified for login: ${decodedToken.uid}`);
     next();
   } catch (error) {
     logger.error('❌ Authentication failed:', error);
