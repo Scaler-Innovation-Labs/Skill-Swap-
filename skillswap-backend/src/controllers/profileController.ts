@@ -345,16 +345,17 @@ export class ProfileController {
   }
 }
 
+// 🔥 UPDATED: Calendar sync method
 static async syncCalendarAvailability(req: Request, res: Response, next: NextFunction) {
   try {
-    const uid = req.user!.uid;
+    const { uid } = req.user!;
     const { accessToken } = req.body;
 
     if (!accessToken) {
       throw new AppError('Google Calendar access token is required', 400);
     }
 
-    // Get user's current manual availability preferences
+    // Get user's current availability preferences
     const userDoc = await firestore.collection('users').doc(uid).get();
     if (!userDoc.exists) {
       throw new AppError('User not found', 404);
@@ -362,7 +363,7 @@ static async syncCalendarAvailability(req: Request, res: Response, next: NextFun
 
     const userData = userDoc.data()!;
     
-    // Ensure availability structure exists with proper defaults
+    // 🔥 UPDATED: Handle new availability format
     let userAvailability = userData.availability;
     
     if (!userAvailability || typeof userAvailability !== 'object') {
@@ -378,11 +379,17 @@ static async syncCalendarAvailability(req: Request, res: Response, next: NextFun
       }
     }
 
-    console.log(`📋 User ${uid} manual availability:`, userAvailability);
+    // Validate day format (should be 3-letter abbreviations)
+    const validDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    userAvailability.days = userAvailability.days.filter((day: string) => validDays.includes(day));
+
+    // Validate time format (should be ranges like "09:00-12:00")
+    const timeRangeRegex = /^\d{2}:\d{2}-\d{2}:\d{2}$/;
+    userAvailability.times = userAvailability.times.filter((time: string) => timeRangeRegex.test(time));
+
+    console.log(`📋 User ${uid} validated availability:`, userAvailability);
 
     const busyTimes = await CalendarService.getUserAvailability(accessToken);
-    
-    // 🔥 UPDATED: Pass uid to consider booked sessions
     const availableSlots = await CalendarService.generateAvailableSlots(busyTimes, userAvailability, uid);
     
     await firestore.collection('users').doc(uid).update({
@@ -401,7 +408,7 @@ static async syncCalendarAvailability(req: Request, res: Response, next: NextFun
       data: {
         available_slots: availableSlots,
         busy_times_count: busyTimes.length,
-        user_manual_availability: userAvailability,
+        user_availability: userAvailability,
         slots_generated: availableSlots.length
       }
     });
@@ -410,14 +417,25 @@ static async syncCalendarAvailability(req: Request, res: Response, next: NextFun
   }
 }
 
-// 🔥 NEW: Enhanced session booking method
-static async bookSession(req: Request, res: Response, next: NextFunction) {
+// 🔥 UPDATED: 2-way session booking
+static async bookTwoWaySession(req: Request, res: Response, next: NextFunction) {
   try {
-    const uid = req.user!.uid;
-    const { accessToken, summary, startTime, endTime, attendeeEmail, participantUid, skillTopic, sessionType, description } = req.body;
+    const { uid: organizerUid } = req.user!;
+    const { 
+      organizerAccessToken, 
+      participantAccessToken,
+      participantUid,
+      summary, 
+      startTime, 
+      endTime, 
+      skillTopic, 
+      sessionType, 
+      description 
+    } = req.body;
 
-    if (!accessToken || !summary || !startTime || !endTime || !attendeeEmail || !participantUid || !skillTopic) {
-      throw new AppError('Missing required fields: accessToken, summary, startTime, endTime, attendeeEmail, participantUid, skillTopic', 400);
+    // Validation
+    if (!organizerAccessToken || !participantAccessToken || !participantUid || !summary || !startTime || !endTime || !skillTopic) {
+      throw new AppError('Missing required fields: organizerAccessToken, participantAccessToken, participantUid, summary, startTime, endTime, skillTopic', 400);
     }
 
     // Validate time format
@@ -432,55 +450,76 @@ static async bookSession(req: Request, res: Response, next: NextFunction) {
       throw new AppError('Start time must be before end time', 400);
     }
 
-    // 🔥 NEW: Book session in our database first
-    const sessionId = await SessionBookingService.bookSession({
-      organizerUid: uid,
+    // Get both users' emails
+    const [organizerDoc, participantDoc] = await Promise.all([
+      firestore.collection('users').doc(organizerUid).get(),
+      firestore.collection('users').doc(participantUid).get()
+    ]);
+
+    if (!organizerDoc.exists || !participantDoc.exists) {
+      throw new AppError('One or both users not found', 404);
+    }
+
+    const organizerEmail = organizerDoc.data()!.email;
+    const participantEmail = participantDoc.data()!.email;
+
+    // Create calendar events for both users
+    const { organizerEvent, participantEvent } = await CalendarService.createTwoWaySessionEvent(
+      organizerAccessToken,
+      participantAccessToken,
+      {
+        summary,
+        startTime,
+        endTime,
+        organizerEmail,
+        participantEmail,
+        description: description || `SkillSwap Session: ${skillTopic}`
+      }
+    );
+
+    // Book session in database
+    const sessionId = await SessionBookingService.bookTwoWaySession({
+      organizerUid,
       participantUid,
       startTime,
       endTime,
       skillTopic,
-      sessionType: sessionType || 'learning'
+      sessionType: sessionType || 'learning',
+      organizerEventId: organizerEvent.id,
+      participantEventId: participantEvent.id
     });
 
-    // Create calendar event
-    const event = await CalendarService.createSessionEvent(accessToken, {
-      summary,
-      startTime,
-      endTime,
-      attendeeEmail,
-      description: description || `SkillSwap Session: ${skillTopic}`
-    });
-
-    // 🔥 NEW: Update session with Google Calendar event ID
-    await firestore.collection('sessions').doc(sessionId).update({
-      google_event_id: event.id,
-      google_event_link: event.htmlLink,
-      hangout_link: event.hangoutLink || null,
-      updated_at: FieldValue.serverTimestamp()
-    });
-
-    logger.info(`✅ Session booked for user ${uid} with event ID: ${event.id}`);
+    logger.info(`✅ 2-way session booked for users ${organizerUid} & ${participantUid}`);
 
     res.status(200).json({
       success: true,
-      message: 'Session booked and added to calendar',
+      message: 'Session booked for both users and added to calendars',
       data: {
-        sessionId: sessionId,
-        eventId: event.id,
-        eventLink: event.htmlLink,
-        hangoutLink: event.hangoutLink || null,
-        summary: event.summary,
-        startTime: event.start?.dateTime,
-        endTime: event.end?.dateTime,
-        attendeeEmail: attendeeEmail,
-        skillTopic: skillTopic
+        sessionId,
+        organizer: {
+          eventId: organizerEvent.id,
+          eventLink: organizerEvent.htmlLink,
+          hangoutLink: organizerEvent.hangoutLink
+        },
+        participant: {
+          eventId: participantEvent.id,
+          eventLink: participantEvent.htmlLink,
+          hangoutLink: participantEvent.hangoutLink
+        },
+        summary,
+        startTime,
+        endTime,
+        skillTopic
       }
     });
   } catch (error) {
-    logger.error(`❌ Failed to book session for user:`, error);
+    logger.error('❌ Failed to book 2-way session:', error);
     next(error);
   }
 }
+
+
+
 
 static async rateSession(req: Request, res: Response, next: NextFunction) {
   try {

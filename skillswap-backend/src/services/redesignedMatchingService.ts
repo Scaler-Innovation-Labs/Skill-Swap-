@@ -93,37 +93,38 @@ export class RedesignedMatchingService {
     const badgeContribution = (badgeScore * 3) / 5;
     totalScore += badgeContribution;
 
-// In calculateMatchScore method, update availability section:
-// 3. AVAILABILITY (with session-aware checking)
-if (learner.calendar_synced && mentor.calendar_synced) {
-  const learnerSlots = learner.available_slots || [];
-  const mentorSlots = mentor.available_slots || [];
-  
-  // These slots already exclude booked sessions
-  const hasOverlap = learnerSlots.some((slot: string) => mentorSlots.includes(slot));
-  if (hasOverlap) {
-    availabilityPoints = this.WEIGHTS.AVAILABILITY;
-    totalScore += availabilityPoints;
+  // In calculateMatchScore method, update availability section:
+  // 3. AVAILABILITY (with session-aware checking)
+  if (learner.calendar_synced && mentor.calendar_synced) {
+    const learnerSlots = learner.available_slots || [];
+    const mentorSlots = mentor.available_slots || [];
+    
+    const hasOverlap = learnerSlots.some((slot: string) => mentorSlots.includes(slot));
+    if (hasOverlap) {
+      availabilityPoints = this.WEIGHTS.AVAILABILITY;
+      totalScore += availabilityPoints;
+    }
+  } else {
+    // Handle manual availability with new format
+    const learnerAvailability = learner.availability || { days: [], times: [] };
+    const mentorAvailability = mentor.availability || { days: [], times: [] };
+    
+    const learnerDays = learnerAvailability.days || [];
+    const mentorDays = mentorAvailability.days || [];
+    const learnerTimes = learnerAvailability.times || [];
+    const mentorTimes = mentorAvailability.times || [];
+
+    // Check for day overlap (3-letter format)
+    const commonDays = learnerDays.filter((day: string) => mentorDays.includes(day));
+    
+    // Check for time range overlap
+    const hasTimeOverlap = this.checkTimeRangeOverlap(learnerTimes, mentorTimes);
+
+    if (commonDays.length > 0 && hasTimeOverlap) {
+      availabilityPoints = this.WEIGHTS.AVAILABILITY;
+      totalScore += availabilityPoints;
+    }
   }
-} else {
-  // Fallback to basic availability
-  const learnerAvailability = learner.availability || { days: [], times: [] };
-  const mentorAvailability = mentor.availability || { days: [], times: [] };
-  
-  const learnerDays = learnerAvailability.days || [];
-  const mentorDays = mentorAvailability.days || [];
-  const learnerTimes = learnerAvailability.times || [];
-  const mentorTimes = mentorAvailability.times || [];
-
-  const commonDays = learnerDays.filter((day: string) => mentorDays.includes(day));
-  const commonTimes = learnerTimes.filter((time: string) => mentorTimes.includes(time));
-
-  if (commonDays.length > 0 && commonTimes.length > 0) {
-    availabilityPoints = this.WEIGHTS.AVAILABILITY;
-    totalScore += availabilityPoints;
-  }
-}
-
 
     return {
     uid: mentor.uid,
@@ -139,6 +140,38 @@ if (learner.calendar_synced && mentor.calendar_synced) {
     availabilityPoints
   };
   }
+
+private static checkTimeRangeOverlap(ranges1: string[], ranges2: string[]): boolean {
+  for (const range1 of ranges1) {
+    for (const range2 of ranges2) {
+      if (this.doTimeRangesOverlap(range1, range2)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// 🔥 NEW: Check if two time ranges overlap
+private static doTimeRangesOverlap(range1: string, range2: string): boolean {
+  try {
+    const [start1, end1] = range1.split('-').map(time => {
+      const [hour, min] = time.split(':').map(Number);
+      return hour * 60 + min; // Convert to minutes
+    });
+    
+    const [start2, end2] = range2.split('-').map(time => {
+      const [hour, min] = time.split(':').map(Number);
+      return hour * 60 + min; // Convert to minutes
+    });
+    
+    // Check if ranges overlap
+    return start1 < end2 && start2 < end1;
+  } catch (error) {
+    console.error('Error parsing time ranges:', error);
+    return false;
+  }
+}
 
   static async storeDenial(learnerUid: string, mentorUid: string): Promise<void> {
     try {

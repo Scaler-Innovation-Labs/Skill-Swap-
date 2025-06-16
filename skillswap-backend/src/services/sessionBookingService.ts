@@ -25,14 +25,16 @@ export class SessionBookingService {
     }
   }
 
-  // Book a new session
-  static async bookSession(sessionData: {
+  // 🔥 UPDATED: 2-way session booking
+  static async bookTwoWaySession(sessionData: {
     organizerUid: string;
     participantUid: string;
     startTime: string;
     endTime: string;
     skillTopic: string;
     sessionType: 'learning' | 'teaching';
+    organizerEventId?: string;
+    participantEventId?: string;
   }): Promise<string> {
     try {
       const sessionRef = firestore.collection('sessions').doc();
@@ -47,14 +49,16 @@ export class SessionBookingService {
         skill_topic: sessionData.skillTopic,
         session_type: sessionData.sessionType,
         status: 'confirmed',
+        organizer_event_id: sessionData.organizerEventId || null,
+        participant_event_id: sessionData.participantEventId || null,
         created_at: FieldValue.serverTimestamp(),
         updated_at: FieldValue.serverTimestamp()
       });
 
-      logger.info(`✅ Session booked: ${sessionRef.id}`);
+      logger.info(`✅ 2-way session booked: ${sessionRef.id}`);
       return sessionRef.id;
     } catch (error) {
-      logger.error('❌ Failed to book session:', error);
+      logger.error('❌ Failed to book 2-way session:', error);
       throw error;
     }
   }

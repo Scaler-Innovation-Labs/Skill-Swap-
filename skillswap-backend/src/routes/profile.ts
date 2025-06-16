@@ -56,20 +56,13 @@ router.post('/calendar/sync',
 );
 
 /**
- * @route   POST /api/profile/calendar/book-session
- * @desc    Book a session and create Google Calendar event
+ * @route   POST /api/profile/session/book-two-way
+ * @desc    Book a session for both users and create calendar events
  * @access  Private
  */
-// Instead of using class method directly, wrap itp
-router.post('/calendar/book-session',
+router.post('/session/book-two-way',
   authenticateToken,
-  async (req, res, next) => {
-    try {
-      await ProfileController.bookSession(req, res, next);
-    } catch (error) {
-      next(error);
-    }
-  }
+  ProfileController.bookTwoWaySession
 );
 
 /**

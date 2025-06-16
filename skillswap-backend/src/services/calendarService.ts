@@ -36,22 +36,22 @@ export class CalendarService {
     }
   }
 
-  // 🔥 UPDATED: Generate available slots considering manual availability AND booked sessions
+  // 🔥 UPDATED: Generate available slots with new day/time format and conflict checking
   static async generateAvailableSlots(
     busyTimes: any[], 
     userAvailability: any, 
     uid: string,
-    workingHours = { start: 10, end: 20 }
+    workingHours = { start: 9, end: 20 }
   ): Promise<string[]> {
     const availableSlots: string[] = [];
     const today = new Date();
     
-    // Day name mapping for JavaScript getDay()
-    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    // 🔥 UPDATED: Use 3-letter day abbreviations
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     
-    console.log('🔍 User manual availability:', userAvailability);
+    console.log('🔍 User availability received:', userAvailability);
     
-    // 🔥 NEW: Get user's booked sessions to exclude them
+    // Get user's booked sessions to exclude them
     const bookedSessions = await SessionBookingService.getUserBookedSessions(uid);
     console.log(`📅 User has ${bookedSessions.length} booked sessions to exclude`);
     
@@ -62,92 +62,145 @@ export class CalendarService {
       const dayName = dayNames[date.getDay()];
       
       // Skip weekends
-      if (date.getDay() === 0 || date.getDay() === 6) {
-        console.log(`⏭️ Skipping weekend: ${dayName}`);
-        continue;
-      }
+      // if (date.getDay() === 0 || date.getDay() === 6) {
+      //   console.log(`⏭️ Skipping weekend: ${dayName}`);
+      //   continue;
+      // }
       
-      // 🔥 CONDITION 1: Check manual availability (days)
+      // 🔥 UPDATED: Check manual availability (3-letter day names)
       if (userAvailability && userAvailability.days && Array.isArray(userAvailability.days) && userAvailability.days.length > 0) {
         if (!userAvailability.days.includes(dayName)) {
-          console.log(`⏭️ Skipping ${dayName} - not in user's manual available days:`, userAvailability.days);
+          console.log(`⏭️ Skipping ${dayName} - not in user's available days:`, userAvailability.days);
           continue;
         } else {
-          console.log(`✅ ${dayName} is in user's manual available days`);
+          console.log(`✅ ${dayName} is in user's available days`);
         }
       } else {
-        console.log(`📝 No manual day preferences, using ${dayName}`);
+        console.log(`⚠️ No manual day preferences found, using ${dayName} by default`);
       }
       
-      // Determine time slots to check
-      let timesToCheck = [];
+      // 🔥 UPDATED: Parse time ranges instead of single times
+      let timeRangesToCheck = [];
       if (userAvailability && userAvailability.times && Array.isArray(userAvailability.times) && userAvailability.times.length > 0) {
-        // 🔥 CONDITION 2: Use user's manual available times
-        timesToCheck = userAvailability.times.map((time: string) => {
-          const [hour] = time.split(':').map(Number);
-          return hour;
+        // Parse time ranges like "09:00-12:00", "14:00-16:00"
+        timeRangesToCheck = userAvailability.times.map((timeRange: string) => {
+          const [startTime, endTime] = timeRange.split('-');
+          const [startHour, startMin] = startTime.split(':').map(Number);
+          const [endHour, endMin] = endTime.split(':').map(Number);
+          return {
+            start: startHour + (startMin / 60),
+            end: endHour + (endMin / 60),
+            range: timeRange
+          };
         });
-        console.log(`⏰ Using user's manual preferred times for ${dayName}:`, timesToCheck);
+        console.log(`⏰ Using user's preferred time ranges for ${dayName}:`, timeRangesToCheck);
       } else {
         // Use default working hours
-        for (let hour = workingHours.start; hour < workingHours.end; hour++) {
-          timesToCheck.push(hour);
-        }
-        console.log(`⏰ Using default working hours for ${dayName}:`, timesToCheck);
+        timeRangesToCheck = [{
+          start: workingHours.start,
+          end: workingHours.end,
+          range: `${workingHours.start}:00-${workingHours.end}:00`
+        }];
+        console.log(`⏰ Using default working hours for ${dayName}:`, timeRangesToCheck);
       }
       
-      // Generate slots for allowed times only
-      for (const hour of timesToCheck) {
-        const slotStart = new Date(date);
-        slotStart.setHours(hour, 0, 0, 0);
+      // Generate 30-minute slots within each time range
+      for (const timeRange of timeRangesToCheck) {
+        let currentHour = timeRange.start;
         
-        const slotEnd = new Date(date);
-        slotEnd.setHours(hour + 1, 0, 0, 0);
-        
-        // 🔥 CONDITION 3: Check for conflicts with Google Calendar busy times
-        const isGoogleCalendarConflict = busyTimes.some((busy: any) => {
-          const busyStart = new Date(busy.start);
-          const busyEnd = new Date(busy.end);
-          return slotStart < busyEnd && slotEnd > busyStart;
-        });
-        
-        // 🔥 CONDITION 4: Check for conflicts with booked sessions
-        const isBookedSessionConflict = bookedSessions.some((session: any) => {
-          const sessionStart = session.start_time.toDate();
-          const sessionEnd = session.end_time.toDate();
-          return slotStart < sessionEnd && slotEnd > sessionStart;
-        });
-        
-        if (!isGoogleCalendarConflict && !isBookedSessionConflict) {
-          //availableSlots.push(slotStart.toISOString());
-          // Convert ISO to normal IST format
-          const normalTime = slotStart.toLocaleString('en-IN', {
-            timeZone: 'Asia/Kolkata',
-            weekday: 'long',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
+        while (currentHour < timeRange.end) {
+          const slotStart = new Date(date);
+          slotStart.setHours(Math.floor(currentHour), (currentHour % 1) * 60, 0, 0);
+          
+          const slotEnd = new Date(date);
+          slotEnd.setHours(Math.floor(currentHour + 0.5), ((currentHour + 0.5) % 1) * 60, 0, 0);
+          
+          // Check for conflicts with Google Calendar busy times
+          const isGoogleCalendarConflict = busyTimes.some((busy: any) => {
+            const busyStart = new Date(busy.start);
+            const busyEnd = new Date(busy.end);
+            return slotStart < busyEnd && slotEnd > busyStart;
           });
-
-          availableSlots.push(normalTime);
-
-          console.log(`✅ Added slot: ${dayName} ${hour}:00 - ${slotStart.toISOString()}`);
-        } else {
-          if (isGoogleCalendarConflict) {
-            console.log(`❌ Google Calendar conflict for ${dayName} ${hour}:00`);
+          
+          // Check for conflicts with booked sessions
+          const isBookedSessionConflict = bookedSessions.some((session: any) => {
+            const sessionStart = session.start_time.toDate();
+            const sessionEnd = session.end_time.toDate();
+            return slotStart < sessionEnd && slotEnd > sessionStart;
+          });
+          
+          if (!isGoogleCalendarConflict && !isBookedSessionConflict) {
+            // Convert to normal format with day name
+            const normalTime = slotStart.toLocaleString('en-IN', {
+              timeZone: 'Asia/Kolkata',
+              weekday: 'short',  // This gives us "Mon", "Tue", etc.
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true
+            });
+            
+            availableSlots.push(normalTime);
+            console.log(`✅ Added slot: ${dayName} ${Math.floor(currentHour)}:${String((currentHour % 1) * 60).padStart(2, '0')} - ${normalTime}`);
+          } else {
+            if (isGoogleCalendarConflict) {
+              console.log(`❌ Google Calendar conflict for ${dayName} ${Math.floor(currentHour)}:${String((currentHour % 1) * 60).padStart(2, '0')}`);
+            }
+            if (isBookedSessionConflict) {
+              console.log(`❌ Booked session conflict for ${dayName} ${Math.floor(currentHour)}:${String((currentHour % 1) * 60).padStart(2, '0')}`);
+            }
           }
-          if (isBookedSessionConflict) {
-            console.log(`❌ Booked session conflict for ${dayName} ${hour}:00`);
-          }
+          
+          currentHour += 0.5; // Move to next 30-minute slot
         }
       }
     }
     
     console.log(`🎯 Total available slots generated: ${availableSlots.length}`);
     return availableSlots;
+  }
+
+  // 🔥 NEW: 2-way session booking
+  static async createTwoWaySessionEvent(
+    organizerAccessToken: string, 
+    participantAccessToken: string,
+    sessionData: {
+      summary: string;
+      startTime: string;
+      endTime: string;
+      organizerEmail: string;
+      participantEmail: string;
+      description?: string;
+    }
+  ): Promise<{ organizerEvent: any, participantEvent: any }> {
+    try {
+      // Create event in organizer's calendar
+      const organizerEvent = await this.createSessionEvent(organizerAccessToken, {
+        summary: sessionData.summary,
+        startTime: sessionData.startTime,
+        endTime: sessionData.endTime,
+        attendeeEmail: sessionData.participantEmail,
+        description: sessionData.description
+      });
+
+      // Create event in participant's calendar
+      const participantEvent = await this.createSessionEvent(participantAccessToken, {
+        summary: sessionData.summary,
+        startTime: sessionData.startTime,
+        endTime: sessionData.endTime,
+        attendeeEmail: sessionData.organizerEmail,
+        description: sessionData.description
+      });
+
+      logger.info(`✅ Created 2-way session events: organizer=${organizerEvent.id}, participant=${participantEvent.id}`);
+      
+      return { organizerEvent, participantEvent };
+    } catch (error) {
+      logger.error('❌ Failed to create 2-way session events:', error);
+      throw new Error('Failed to create calendar events for both users');
+    }
   }
 
   // Existing createSessionEvent method remains the same

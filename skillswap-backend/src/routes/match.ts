@@ -8,15 +8,15 @@ import { ProfileController } from '../controllers/profileController';
 const router = express.Router();
 
 
-/**
- * @route   POST /api/profile/calendar/book-session
- * @desc    Book a session and create Google Calendar event
- * @access  Private
- */
-router.post('/calendar/book-session',
-  authenticateToken,
-  ProfileController.bookSession
-);
+// /**
+//  * @route   POST /api/profile/calendar/book-session
+//  * @desc    Book a session and create Google Calendar event
+//  * @access  Private
+//  */
+// router.post('/calendar/book-session',
+//   authenticateToken,
+//   ProfileController.bookSession
+// );
 
 /**
  * @route   GET /api/match
