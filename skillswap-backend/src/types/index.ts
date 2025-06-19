@@ -7,7 +7,7 @@ export interface User {
   skills_offered: string[];
   skills_wanted: string[];
   availability: {
-    days: string[];
+    days: ('Sun' | 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat')[];
     times: string[];
   };
   created_at: Date;

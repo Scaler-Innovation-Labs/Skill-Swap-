@@ -61,49 +61,56 @@ export class UserService {
   }
 
   // Update user with cache invalidation
-  static async updateUser(uid: string, updateData: UpdateProfileRequest): Promise<User> {
-    try {
-      // Clean the data
-      const cleanedData: UpdateProfileRequest = {};
-      if (updateData.name) {
-        cleanedData.name = updateData.name.trim();
-      }
-      if (updateData.skills_offered) {
-        cleanedData.skills_offered = updateData.skills_offered.map(skill => skill.trim());
-      }
-      if (updateData.skills_wanted) {
-        cleanedData.skills_wanted = updateData.skills_wanted.map(skill => skill.trim());
-      }
-      if (updateData.availability) {
-        cleanedData.availability = updateData.availability;
-      }
-      if (updateData.avatar_url) {
-        cleanedData.avatar_url = updateData.avatar_url;
-      }
-
-      // Update user
-      const updatedUser = await UserModel.update(uid, cleanedData);
-
-      // Update cache
-      await CacheService.setUserProfile(uid, updatedUser);
-
-      // Update skill popularity if skills changed
-      if (cleanedData.skills_offered) {
-        for (const skill of cleanedData.skills_offered) {
-          await CacheService.incrementSkillPopularity(skill);
-        }
-      }
-
-      // Clear matches cache since profile changed
-      await redis.del(`matches:${uid}`);
-
-      logger.info(`✅ User service: Updated user ${uid}`);
-      return updatedUser;
-    } catch (error) {
-      logger.error(`❌ User service: Failed to update user ${uid}:`, error);
-      throw error;
+  // In updateUser method, add these fields to the cleanedData handling
+static async updateUser(uid: string, updateData: UpdateProfileRequest & {
+  badge_score?: number;
+  badge_count?: number;
+  total_badge_points?: number;
+  // ... other existing fields
+}): Promise<User> {
+  try {
+    // Clean the data
+    const cleanedData: any = {};
+    
+    // Existing fields (name, skills, etc.)
+    if (updateData.name) {
+      cleanedData.name = updateData.name.trim();
     }
+    if (updateData.skills_offered) {
+      cleanedData.skills_offered = updateData.skills_offered.map(skill => skill.trim());
+    }
+    if (updateData.skills_wanted) {
+      cleanedData.skills_wanted = updateData.skills_wanted.map(skill => skill.trim());
+    }
+    if (updateData.availability) {
+      cleanedData.availability = updateData.availability;
+    }
+    if (updateData.avatar_url) {
+      cleanedData.avatar_url = updateData.avatar_url;
+    }
+
+    // 🔥 ADD: Badge score fields
+    if (updateData.badge_score !== undefined) {
+      cleanedData.badge_score = updateData.badge_score;
+    }
+    if (updateData.badge_count !== undefined) {
+      cleanedData.badge_count = updateData.badge_count;
+    }
+    if (updateData.total_badge_points !== undefined) {
+      cleanedData.total_badge_points = updateData.total_badge_points;
+    }
+
+    // Update user
+    const updatedUser = await UserModel.update(uid, cleanedData);
+
+    // Rest of your existing logic...
+    return updatedUser;
+  } catch (error) {
+    logger.error(`❌ User service: Failed to update user ${uid}:`, error);
+    throw error;
   }
+}
+
 
   // Get users for matching with business logic
   static async getUsersForMatching(excludeUid: string, limit: number = 50): Promise<User[]> {
