@@ -60,7 +60,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={value}>
-      {children}
+      <div className="container max-w-screen-xl mx-auto px-4 sm:px-6">
+        {children}
+      </div>
     </AuthContext.Provider>
   );
 }
