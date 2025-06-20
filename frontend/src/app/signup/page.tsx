@@ -1,39 +1,87 @@
 "use client";
 
 import { useState } from "react";
-import { createUserWithEmailAndPassword, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup } from "firebase/auth";
+import { createUserWithEmailAndPassword, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, updateProfile } from "firebase/auth";
 import { auth } from "../../../firebase";
 import { useRouter } from "next/navigation";
+import { upsertUserProfile } from "@/services/firestore-service";
 
 const Signup = () => {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
   const googleProvider = new GoogleAuthProvider();
   const facebookProvider = new FacebookAuthProvider();
 
   const handleSignUp = async () => {
+    if (!name.trim()) {
+      alert("Name is required");
+      return;
+    }
     if (password !== confirmPassword) {
       alert("Passwords do not match");
       return;
     }
+    
+    setLoading(true);
     try {
-      await createUserWithEmailAndPassword(auth, email, password);
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+      
+      // Update Firebase user profile with display name
+      await updateProfile(user, {
+        displayName: name.trim()
+      });
+
+      // Save user profile to Firestore
+      await upsertUserProfile({
+        uid: user.uid,
+        displayName: name.trim(),
+        photoURL: user.photoURL || undefined,
+        teachingSkills: [],
+        learningSkills: [],
+        rating: 0,
+        completedSessions: 0
+      });
+
       alert("User Created Successfully!");
-      router.push("/signin");
+      router.push("/dashboard");
     } catch (error: any) {
       alert(error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleOAuthSignIn = async (provider: GoogleAuthProvider | FacebookAuthProvider) => {
+    setLoading(true);
     try {
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+      
+      // For OAuth users, use their display name or email prefix
+      const displayName = user.displayName || user.email?.split('@')[0] || 'User';
+      
+      // Save user profile to Firestore
+      await upsertUserProfile({
+        uid: user.uid,
+        displayName,
+        photoURL: user.photoURL || undefined,
+        teachingSkills: [],
+        learningSkills: [],
+        rating: 0,
+        completedSessions: 0
+      });
+
       router.push("/dashboard");
     } catch (error: any) {
       alert(error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -47,11 +95,23 @@ const Signup = () => {
 
         <div className="space-y-4">
           <div>
+            <label className="block mb-1 text-sm">Full Name</label>
+            <input
+              type="text"
+              placeholder="Enter your full name"
+              className="w-full px-4 py-2 rounded-md bg-black border border-gray-700 placeholder-gray-500 text-white focus:outline-none focus:ring-2 focus:ring-white"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+
+          <div>
             <label className="block mb-1 text-sm">Email</label>
             <input
               type="email"
               placeholder="example@email.com"
               className="w-full px-4 py-2 rounded-md bg-black border border-gray-700 placeholder-gray-500 text-white focus:outline-none focus:ring-2 focus:ring-white"
+              value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
@@ -67,6 +127,7 @@ const Signup = () => {
               type="password"
               placeholder="Password"
               className="w-full px-4 py-2 rounded-md bg-black border border-gray-700 placeholder-gray-500 text-white focus:outline-none focus:ring-2 focus:ring-white"
+              value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
@@ -77,15 +138,17 @@ const Signup = () => {
               type="password"
               placeholder="Confirm Password"
               className="w-full px-4 py-2 rounded-md bg-black border border-gray-700 placeholder-gray-500 text-white focus:outline-none focus:ring-2 focus:ring-white"
+              value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
             />
           </div>
 
           <button
             onClick={handleSignUp}
-            className="w-full bg-white text-black py-2 rounded-md font-medium hover:opacity-90 transition"
+            disabled={loading}
+            className="w-full bg-white text-black py-2 rounded-md font-medium hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Continue
+            {loading ? "Creating Account..." : "Continue"}
           </button>
         </div>
 
@@ -98,7 +161,8 @@ const Signup = () => {
         <div className="flex gap-4">
           <button
             onClick={() => handleOAuthSignIn(googleProvider)}
-            className="flex-1 flex items-center justify-center border border-gray-700 rounded-md py-2 hover:bg-white hover:text-black transition"
+            disabled={loading}
+            className="flex-1 flex items-center justify-center border border-gray-700 rounded-md py-2 hover:bg-white hover:text-black transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" viewBox="0 0 48 48">
               <path fill="#fbc02d" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12	s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20	s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"></path>
@@ -110,7 +174,8 @@ const Signup = () => {
           </button>
           <button
             onClick={() => handleOAuthSignIn(facebookProvider)}
-            className="flex-1 flex items-center justify-center border border-gray-700 rounded-md py-2 hover:bg-white hover:text-black transition"
+            disabled={loading}
+            className="flex-1 flex items-center justify-center border border-gray-700 rounded-md py-2 hover:bg-white hover:text-black transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" viewBox="0 0 48 48">
               <linearGradient id="awSgIinfw5_FS5MLHI~A9a_yGcWL8copNNQ_gr1" x1="6.228" x2="42.077" y1="4.896" y2="43.432" gradientUnits="userSpaceOnUse">
