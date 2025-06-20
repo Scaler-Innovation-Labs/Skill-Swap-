@@ -4,6 +4,9 @@ import { MatchController } from '../controllers/matchController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { validateProfileUpdate, validateUidParam, validatePagination } from '../middleware/validation';
 import { profileRateLimit, matchRateLimit } from '../middleware/ratelimitter';
+// Add these imports at the top if missing
+import { body } from 'express-validator';
+import { handleValidationErrors } from '../middleware/validation'; // Adjust path as needed
 
 const router = express.Router();
 
@@ -89,11 +92,24 @@ router.post('/badges',
 
 /**
  * @route   POST /api/profile/rate-session
- * @desc    Rate a completed session and update mentor's badge score
+ * @desc    Rate a completed session
  * @access  Private
+ * @body    { sessionId, mentorUid, rating }
  */
 router.post('/rate-session',
-  authenticateToken,
+  authenticateToken, // Your existing middleware
+  [
+    body('sessionId')
+      .notEmpty()
+      .withMessage('Session ID is required'),
+    body('mentorUid')
+      .notEmpty()
+      .withMessage('Mentor ID is required'),
+    body('rating')
+      .isInt({ min: 1, max: 5 })
+      .withMessage('Rating must be an integer between 1 and 5'),
+    handleValidationErrors
+  ],
   ProfileController.rateSession
 );
 

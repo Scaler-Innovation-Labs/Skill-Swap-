@@ -7,6 +7,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { CalendarService } from '../services/calendarService';
 import { SessionRatingService } from '../services/sessionRatingService';
 import { SessionBookingService } from '../services/sessionBookingService';
+import { UserService } from '../services/userService';
 
 export class ProfileController {
   // Get current user's profile
@@ -523,36 +524,104 @@ static async bookTwoWaySession(req: Request, res: Response, next: NextFunction) 
 
 static async rateSession(req: Request, res: Response, next: NextFunction) {
   try {
-    const raterUid = req.user!.uid;
+    const { uid } = req.user!; // Current user (the one giving the rating)
     const { sessionId, mentorUid, rating } = req.body;
 
+    // Basic field validation
     if (!sessionId || !mentorUid || !rating) {
-      throw new AppError('Session ID, mentor UID, and rating are required', 400);
+      throw new AppError('Missing required fields: sessionId, mentorUid, rating', 400);
     }
 
-    if (rating < 1 || rating > 5) {
-      throw new AppError('Rating must be between 1 and 5', 400);
+    // Validate rating value
+    if (rating < 1 || rating > 5 || !Number.isInteger(rating)) {
+      throw new AppError('Rating must be an integer between 1 and 5', 400);
     }
 
-    await SessionRatingService.rateSession(sessionId, raterUid, mentorUid, rating);
+    // 🔥 VALIDATION 1: Check if session exists
+    const sessionDoc = await firestore.collection('sessions').doc(sessionId).get();
+    if (!sessionDoc.exists) {
+      throw new AppError('Session does not exist', 404);
+    }
 
-    const mentorDoc = await firestore.collection('users').doc(mentorUid).get();
-    const mentorData = mentorDoc.data()!;
+    const sessionData = sessionDoc.data()!;
 
-    logger.info(`✅ Session rated by ${raterUid}: ${rating}/5 for mentor ${mentorUid}`);
+    // 🔥 VALIDATION 2: Check if mentorUid is a participant in the session
+    const participants = sessionData.participants || [];
+    if (!participants.includes(mentorUid)) {
+      throw new AppError('Mentor is not a participant in this session', 400);
+    }
+
+    // 🔥 VALIDATION 3: Check if mentor has already been rated for this session
+    const existingRatingQuery = await firestore
+      .collection('session_ratings')
+      .where('sessionId', '==', sessionId)
+      .where('mentorUid', '==', mentorUid)
+      .limit(1)
+      .get();
+
+    if (!existingRatingQuery.empty) {
+      throw new AppError('This mentor has already been rated for this session', 409);
+    }
+
+    // Additional validation: Ensure the current user is also a participant
+    if (!participants.includes(uid)) {
+      throw new AppError('You are not authorized to rate this session', 403);
+    }
+
+    // Additional validation: Ensure user is not rating themselves
+    if (uid === mentorUid) {
+      throw new AppError('You cannot rate yourself', 400);
+    }
+
+    // Get mentor using UserService (your existing pattern)
+    const mentor = await UserService.getUser(mentorUid);
+    if (!mentor) {
+      throw new AppError('Mentor not found', 404);
+    }
+
+    // Store the rating in session_ratings collection
+    const ratingRef = firestore.collection('session_ratings').doc();
+    await ratingRef.set({
+      id: ratingRef.id,
+      sessionId,
+      mentorUid,
+      raterUid: uid, // Who gave the rating
+      rating,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    // Calculate new badge score for the mentor
+    const currentScore = mentor.badge_score || 0;
+    const currentCount = mentor.badge_count || 0;
+    const newCount = currentCount + 1;
+    const newScore = ((currentScore * currentCount) + rating) / newCount;
+
+    // Update mentor's badge score using UserService
+    await UserService.updateUser(mentorUid, {
+      badge_score: parseFloat(newScore.toFixed(2)), // Round to 2 decimal places
+      badge_count: newCount,
+      total_badge_points: (mentor.total_badge_points || 0) + rating
+    });
+
+    logger.info(`✅ Session rated: ${sessionId}, mentor: ${mentorUid}, rating: ${rating}, new score: ${newScore.toFixed(2)}`);
 
     res.status(200).json({
       success: true,
       message: 'Session rated successfully',
       data: {
-        mentor_new_badge_score: mentorData.badge_score,
-        mentor_total_ratings: mentorData.badge_count
+        ratingId: ratingRef.id,
+        mentor_new_badge_score: parseFloat(newScore.toFixed(2)),
+        mentor_total_ratings: newCount,
+        rating_given: rating
       }
     });
   } catch (error) {
+    logger.error(`❌ Failed to rate session:`, error);
     next(error);
   }
 }
+
 
 // static async bookSession(req: Request, res: Response, next: NextFunction) {
 //   try {
